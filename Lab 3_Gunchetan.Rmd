@@ -1,0 +1,274 @@
+---
+title: "CEE 322 - Lab 3"
+author: "Gunchetan Singh Johal"
+date: "10/21/2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(e1071)
+library(neuralnet)
+library(ggplot2)
+library(polynom)
+library(dplyr)
+library(tidyr)
+library(ggfortify)
+library(pls)
+library(gbm)
+library(leaps)
+library(AppliedPredictiveModeling)
+library(caret)
+library(e1071)
+library(earth)
+library(leaps)
+library(boot)
+library(kernlab)
+library(randomForest)
+library(foreach)
+library(import)
+library(neuralnet)
+library(pls)
+library(foba)
+```
+
+#Introduction
+We have been appointed as a consultant in a large building management company. The purpose of this report is to provide some insights about building electricity usage. In particular, we are interested in the daily load shapes and the corresponding consumption patterns as this knowledge has the potential to improve energy reduction recommendations.
+We will start by focusing our attention to one particular building, for which we have smart meter data. For this building, we will:
+-- Find electricity load patterns based on this data
+-- Hypothesize about the reasons behind these load patterns
+Next, we will study a set of different building, for which we have data on the itemized uses of electricity. For these buildings, we will:
+-- Understand further on the dimensionality of the electricity itemized uses
+-- What are the possible relations between these itemized uses
+-- Which combinations of these usages account for 90 - 95% of variance in electricity loads
+-- Explore what are the hypotheses that can possibly explain those principal uses, and
+-- Investigate that, whether a normalization for data with same unit is still necessary, or not.
+
+
+#Dataset
+We have been provided with the following two datasets:
+-- One year's electricity consumption time series data from some building's smart meter. The measurement time interval is 15 minutes, and the unit is kWh.
+-- Data set with statistics on over 5000 commercial buildings. The data could be found in elec_end_use.csv, and a description of the columns could be found in elec_end_use_descrip.txt.
+
+First, we will load these data files into our analysis:
+```{r}
+load(file="smb_ts.Rdata")
+#make a copy of the original dataset
+smart_meter_building <- smb_ts
+#make a copy of the 2nd original dataset
+elec_end_use_bldgs <- read.csv(file = 'elec_end_use.csv', header = TRUE, sep = ',')
+```
+Now, the one year's electricity consumption data provided for the smart meter in our building is a one dimensional time series data. We need to convert this into a matrix form, with each column representing a daily load so that we can explore daily load shapes and patterns.
+Now, to do that, we know that our values correspond to the electricity consumption every 15 minutes. So, in order to re-arrange the data so that we get one day per row, we need 4x24 (4 15 min intervals in an hour and 24 hours per day) number of columns and 35040/(4x24) number of columns as we have a total of 35040 entries in the smart meter data and each row will take up 4x24 data points.
+
+```{r}
+length(smart_meter_building)
+#turn the data into a matrix form
+smart_meter_bldg_matrix <- matrix(smart_meter_building, nrow = 4*24, ncol = 35040/(4*24))
+
+#each column is a day now
+rownames(smart_meter_bldg_matrix) <- c(seq(15, (15*24*4), by=15))
+colnames(smart_meter_bldg_matrix) <- c(1:365)
+
+#turn the matrix into a data frame
+smb_data <- as.data.frame(smart_meter_bldg_matrix)
+
+smb_matrix_normal <- t(t(smart_meter_bldg_matrix)/colSums(smart_meter_bldg_matrix))
+smb_data_normal <- as.data.frame(t(t(smb_data)/colSums(smb_data)))
+```
+As we can now, see, our smart meter building data has 96 rows (each row represnting 15 min) and 365 columns, each representing 1 day recording of electricity consumption.
+Now, let us look at the data provided in elec_end_use.Here we can see that we have been provided data on 26 variables for over 5000 buildings. The key information provided is for building Square footage (SQFT8) and a categorization of it, year of construction category (YRCONC8), Principal building activity (PBA8), Electricity used (ELUSED8), Natural Gas Used (NGUSED8), and data prividing the amount of electricity used (in thousand BTUs) for various usages such as heating, cooling use (thous Btu), ventilation,water heating, lighting, ,cooking, refrigeration, office equipment, computer use and miscellaneous.  
+
+The last data adjustment that we will do is to add a row at the end of our smart meter data that shows the day of the year.
+
+```{r}
+smb_data_original <- smb_data
+smb_data[nrow(smb_data) + 1, ] <- c(1:365)
+smb_data_normal_original <- smb_data_normal
+smb_data_normal[nrow(smb_data_normal) + 1, ] <- c(1:365)
+```
+
+#Analysis
+We will begin our analysis by plotting the daily consumption of electricity on different days in our "smart" building (the building with smart meter):
+
+
+1. Plotting the electricity usage on day 1 of year (without normalization)
+```{r}
+plot(smart_meter_bldg_matrix[,7],type = 'l')
+#normalized data plots
+plot(smb_matrix_normal[,7],type = 'l')
+```
+
+As we can see, there seems to be a specific period of some days where the majority of activity happens in the building.In others, there seems to be no electricity usage spike at all.
+Plotting the consumption pattern across multiple days of the year should give us some insight into the energy usage patterns based on day of the week:
+
+```{r}
+plot.ts(smb_data_normal_original[1:10], main="Fig. 1 - Energy Consumption over 10 days", xlab="Time (1 unit = 15 min)", ylab="Normalized Energy consumption for each day")
+plot.ts(smb_data_normal_original[11:20], main="Appendix Fig. 1 - Energy Consumption over 10 days", xlab="Time (1 unit = 15 min)", ylab="Normalized Energy consumption for each day")
+plot.ts(smb_data_normal_original[21:30], main="Appendix Fig. 2 - Energy Consumption over 10 days", xlab="Time (1 unit = 15 min)", ylab="Normalized Energy consumption for each day")
+plot.ts(smb_data_normal_original[31:40], main="Appendix Fig. 3 - Energy Consumption over 10 days", xlab="Time (1 unit = 15 min)", ylab="Normalized Energy consumption for each day")
+```
+
+From these plotes, we see that there is some cyclicity to the energy use patterns. the days 1,2,8,9,15,16... have very similar patterns with very low ebnergy consumption. On the other hand, the days 3, 4, 5, 6 & 7 have characteristic "humps" in electricity usages. So, we can postulate that the days 1 & 2 are weekends, where no activity is done in the building, while the rest of the days represent weekdays where we have various activities in the building through 9am to 5PM.
+Let us also explore the data using a visualization of the total energy consumption of each day over a full year:
+```{r}
+smb_data[nrow(smb_data) + 1, ] <- colSums(smb_data[1:96,])
+smb_data_t <- as.data.frame(t(smb_data))
+ggplot(smb_data_t, aes(smb_data_t[,97], smb_data_t[,98])) + geom_point() + labs(x="Day of the year", y="Total Energy Consumption", title="Fig. 2 - Energy consumed per day over 1 year")
+```
+We see that the energy consumption is much higher during the winter time as compared to the rest of the year, which tells us that this building is located in an area where heating loads are more significant than cooling loads.
+
+As we can see from our individual day plots, there is a certain pattern to the electricity usage shapes on different days with each day having a slightly differnet shape. We will now try to arrive at a limited number of load patterns that can explain the electricity usage of the majority of the days. This will help us understand the nature of electricity demand on any given day in the future and help make an informed decision about energy generation or possible integration of PVs, battery systems or EV charging stations in our building. However, it is hard for us to arrive at a few representative patterns using just our eyes. We arrive at these limited representative patterns through clustering, starting with an iteration iof 7 possible clusters (Assuming that each day would have it's own unique pattern):
+
+```{r}
+csmb_normal <-kmeans(t(smb_matrix_normal),7,nstart=25)
+csmb_normal$size
+plot(csmb_normal$cluster, main="Appendix Fig. 4 - Number of days represented by cluster", xlab="Days of the year", ylab="Representative Cluster")
+hist(csmb_normal$cluster)
+plot(csmb_normal$centers[1,],t='l', main="Appendix Fig. 5 - Load pattern 1", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal$centers[2,],t='l', main="Appendix Fig. 6 - Load pattern 2", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal$centers[3,],t='l', main="Appendix Fig. 7 - Load pattern 3", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal$centers[4,],t='l', main="Appendix Fig. 8 - Load pattern 4", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal$centers[5,],t='l', main="Appendix Fig. 9 - Load pattern 5", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal$centers[6,],t='l', main="Appendix Fig. 10 - Load pattern 6", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal$centers[7,],t='l', main="Appendix Fig. 11 - Load pattern 7", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+```
+However, we see that if we make 7 groups, we end up with a representative pattern that actually represents very small number of cases (9). Additionally, we see that clusters 1, 2 and 4 have very similar load shapes.
+Let us check which days are falling into each of these clusters:
+
+```{r}
+hist(csmb_normal$cluster[1+(7*(0:51))], xlim = c(0,7), breaks=seq(0,7,1), main="Appendix Fig. 12 - Load patterns that represent Saturdays", xlab="Load pattern number)", ylab="Number of Saturdays represented")
+hist(csmb_normal$cluster[2+(7*(0:51))], xlim = c(0,7), breaks=seq(0,7,1), main="Appendix Fig. 13 - Load patterns that represent Sundays", xlab="Load pattern number", ylab="Number of Sundays represented")
+hist(csmb_normal$cluster[3+(7*(0:51))], xlim = c(0,7), breaks=seq(0,7,1), main="Appendix Fig. 14 - Load patterns that represent Mondays", xlab="Load pattern number", ylab="Number of Mondays represented")
+hist(csmb_normal$cluster[4+(7*(0:51))], xlim = c(0,7), breaks=seq(0,7,1), main="Appendix Fig. 15 - Load patterns that represent Tuedays", xlab="Load pattern number", ylab="Number of Tuedays represented")
+hist(csmb_normal$cluster[5+(7*(0:51))], xlim = c(0,7), breaks=seq(0,7,1), main="Appendix Fig. 16 - Load patterns that represent Wednesdays", xlab="Load pattern number", ylab="Number of Wednesdays represented")
+hist(csmb_normal$cluster[6+(7*(0:51))], xlim = c(0,7), breaks=seq(0,7,1), main="Appendix Fig. 17 - Load patterns that represent Thursdays", xlab="Load pattern number", ylab="Number of Thursdays represented")
+hist(csmb_normal$cluster[7+(7*(0:51))], xlim = c(0,7), breaks=seq(0,7,1), main="Appendix Fig. 18 - Load patterns that represent Thursdays", xlab="Load pattern number", ylab="Number of Thursdays represented")
+
+```
+
+From here, we see that almost all days fall into either category 3, 4, 6 or 7 and pattern 1,2 & 4 are similar in shape . So, we iterate again with 4 clusters and we see the results:
+Iterating with 4 cases:
+
+```{r}
+csmb_normal_2 <-kmeans(t(smb_matrix_normal),4,nstart=25)
+csmb_normal_2$size
+plot(csmb_normal_2$cluster, main="Fig. 3 - No. of days represented in each load pattern", xlab="Day of the year", ylab="Load pattern number", ylim = c(0,4))
+hist(csmb_normal_2$cluster)
+plot(csmb_normal_2$centers[1,],t='l', main="Fig. 4 - Load pattern 1", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal_2$centers[2,],t='l', main="Fig. 5 - Load pattern 2", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal_2$centers[3,],t='l', main="Fig. 6 - Load pattern 3", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+plot(csmb_normal_2$centers[4,],t='l', main="Fig. 7 - Load pattern 4", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+
+```
+Here, we see a fairly even distribution where each load patern represents a sizeable number of days.
+
+Now, we will check how well these days are represented in each of these clustered patterns:
+```{r}
+elec <- smb_matrix_normal[,csmb_normal_2$cluster ==1]
+matplot(elec,type = "l", main="Appendix Fig. 19 - Load pattern 1", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+elec <- smb_matrix_normal[,csmb_normal_2$cluster ==2]
+matplot(elec,type = "l", main="Fig. 8 - Load pattern 2", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+elec <- smb_matrix_normal[,csmb_normal_2$cluster ==3]
+matplot(elec,type = "l", main="Appendix Fig. 21 - Load pattern 3", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+elec <- smb_matrix_normal[,csmb_normal_2$cluster ==4]
+matplot(elec,type = "l", main="Fig. 8 - Clustering of Load pattern 4", xlab="Time of day (1 interval = 15min)", ylab="Normalized electricity load")
+```
+
+Let us see which days of the week are included in each of our representative load figures:
+
+```{r}
+hist(csmb_normal_2$cluster[1+(7*(0:51))], xlim = c(0,4), breaks=seq(0,4,1),main="Fig. 9 - Load patterns representing Saturdays", xlab="Load pattern number", ylab="Frequency of days represented")
+hist(csmb_normal_2$cluster[2+(7*(0:51))], xlim = c(0,4), breaks=seq(0,4,1),main="Fig. 10 - Load patterns representing Sundays", xlab="Load pattern number", ylab="Frequency of days represented")
+hist(csmb_normal_2$cluster[3+(7*(0:51))], xlim = c(0,4), breaks=seq(0,4,1),main="Fig. 11 - Load patterns representing Mondays", xlab="Load pattern number", ylab="Frequency of days represented")
+hist(csmb_normal_2$cluster[4+(7*(0:51))], xlim = c(0,4), breaks=seq(0,4,1),main="Fig.12 - Load patterns representing Tuesdays", xlab="Load pattern number", ylab="Frequency of days represented")
+hist(csmb_normal_2$cluster[5+(7*(0:51))], xlim = c(0,4), breaks=seq(0,4,1),main="Fig. 13 - Load patterns representing Wednesdays", xlab="Load pattern number", ylab="Frequency of days represented")
+hist(csmb_normal_2$cluster[6+(7*(0:51))], xlim = c(0,4), breaks=seq(0,4,1),main="Fig. 14 - Load patterns representing Thursdays", xlab="Load pattern number", ylab="Frequency of days represented")
+hist(csmb_normal_2$cluster[7+(7*(0:51))], xlim = c(0,4), breaks=seq(0,4,1),main="Fig. 15 - Load patterns representing Fridays", xlab="Load pattern number", ylab="Frequency of days represented")
+```
+So, we can see that all Saturdays and sundays fall into category 2. Mondays fall predominantly in category 2 with some mondays falling in 1,3 & 4. Tuesdays and Wednesdays fall in category 1 ,4 & 3 in decreasing order.Thursdays and Fridays fall into categories 4,1 and 3 in descending order.
+
+Part 3 - PCA
+Wr are also very interested in the electricity consumption (in kBTU) for different end uses in a given building, and in assessing the dependencies among these end uses.
+Therefore, we want to only focus on the data available ono heating, cooling, water heating, lighting, cooking, refrigeration, office equipment, computer, and misc. use. Therefore, we will extract the data on these end uses form our buildings dataset with the aim of finding how many loading vectors are required to explain the majority of variance in building electricity end usage, for example, 90-95% of variance.
+
+We will start by performing some exploratory data analysis on this data by looking at the plots of total electricity usage of a building and the individual usages. We see that only Cooling use, lighting use, PC use and miscellaneous usage have a clear linear trend with respect to the building total electricity usage. This shows that these usages will certainly have a significant impact on the total electricity usage of a building. Please refer Appendix for the plots.
+Then, we try to find the principal components that effect the building electricity usage. the results are shown in the following table:
+
+```{r}
+#making a subset
+elec_end_use <- subset(elec_end_use_bldgs, select = c("ELHTBTU8", "ELCLBTU8", "ELWTBTU8", "ELLTBTU8", "ELCKBTU8", "ELRFBTU8", "ELOFBTU8", "ELPCBTU8", "ELMSBTU8"))
+
+#doing exploratory data analysis on building total electricity usage and various variables:
+
+total_elec_usage <- rowSums(elec_end_use)
+plot(total_elec_usage, elec_end_use_bldgs$ELHTBTU8, main="Appendix Fig. 22 - Heating load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="Heating Load")
+plot(total_elec_usage, elec_end_use_bldgs$ELCLBTU8, main="Appendix Fig. 23 - Cooling load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="Cooling Load")
+plot(total_elec_usage, elec_end_use_bldgs$ELWTBTU8, main="Appendix Fig. 24 - Water heating load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="Water heating Load")
+plot(total_elec_usage, elec_end_use_bldgs$ELLTBTU8, main="Appendix Fig. 25 - Lighting load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="Lighting Load")
+plot(total_elec_usage, elec_end_use_bldgs$ELCKBTU8, main="Appendix Fig. 26 - Cooking load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="Cooking Load")
+plot(total_elec_usage, elec_end_use_bldgs$ELRFBTU8, main="Appendix Fig. 27 - Refrigeration load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="Refrigeration Load")
+plot(total_elec_usage, elec_end_use_bldgs$ELOFBTU8, main="Appendix Fig. 28 - Office Equipment load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="Office Equipment Load")
+plot(total_elec_usage, elec_end_use_bldgs$ELPCBTU8, main="Appendix Fig. 29 - PC load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="PC Load")
+plot(total_elec_usage, elec_end_use_bldgs$ELMSBTU8, main="Appendix Fig. 30 - Misc. load w.r.t. Total bldg load", xlab="Total building electricity load", ylab="Misc. Load")
+
+#checking the relation between these variables
+pcabd <- princomp(na.omit(elec_end_use, scores = TRUE))
+pcabd$loadings
+```
+
+The below table shows the summary of our prncipal component analysis:
+```{r}
+summary(pcabd)
+```
+Based on the above, we see that 93.6% of the variance can be explained by Cooling loads, Lighting loads, PC usage and miscellaneous loads. But to explain 95% of the load, everything but the cooking load is required.
+
+-plotting the variance 
+```{r}
+explainedvar <- cumsum(pcabd$sdev^2)
+plot(explainedvar/explainedvar[6],main="Fig. 16 - Vectors required to explain load variance", xlab="Number of vectors", ylab="Percentage of Variance explained")
+```
+
+
+Now, let us repeat this analysis using normalized data.
+
+```{r}
+elec_end_use_normal <- elec_end_use/rowSums(elec_end_use)
+pcabd_normal <- princomp(na.omit(elec_end_use_normal, scores = TRUE))
+pcabd_normal$loadings
+```
+
+Summarizing
+```{r}
+summary(pcabd_normal)
+explainedvar <- cumsum(pcabd_normal$sdev^2)
+plot(explainedvar/explainedvar[6],main="Fig. 17 - Vectors required to explain load variance", xlab="Number of vectors", ylab="Percentage of Variance explained")
+```
+
+Once again, we see that to explain 95% variance in the electricity consumption, every end-use except for cooking use is required. However, we can clearly see that the most important ones are Lighting, Cooling and refrigeration, which account for 81% of the variance.
+When we were looking at this data without normalization, we saw that Cooling loads, Lighting loads, PC usage and miscellaneous loads could explain 93% of the variance while with normalization, refrigeration becomes more important. This is because each of the variables have a wide 
+variety of ranges for the different buildings. Therefore, the various end-uses need to be normalized w.r.t. to the total building energy consumption in order to ascertain their importance in determining the total building electricity load.
+
+#Conclusion
+
+#Appendix
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
